@@ -98,23 +98,30 @@ class NxLocales extends LitElement {
     };
   }
 
+  /**
+   * @returns {Promise<boolean>} false when manual-copy overlay is shown (do not auto-dismiss)
+   */
   async _copyToClipboard(publishedUrls) {
     const urls = publishedUrls.map((page) => page.resp.live.url);
     if (urls && urls.length > 0) {
+      const joined = urls.join('\n');
       this._message = { text: `${urls.length} page(s) published - Urls copied to clipboard` };
       const type = 'text/plain';
-      const clipboardItemData = { [type]: [urls.join('\n')] };
+      const clipboardItemData = { [type]: [joined] };
       const clipboardItem = new ClipboardItem(clipboardItemData);
       try {
         await navigator.clipboard.write([clipboardItem]);
-      } catch (err) {
+      } catch {
         this._message = {
-          text: 'Failed to copy URLs to clipboard. Please copy manually.',
+          text: 'The following pages were published. Use ctrl+a and ctrl+c to select and copy the URLs.',
+          manualCopyText: joined,
         };
+        return false;
       }
     } else {
       this._message = { text: 'No pages published' };
     }
+    return true;
   }
 
   async handlePublishAll(items) {
@@ -127,7 +134,8 @@ class NxLocales extends LitElement {
       .map((lang) => ({ path: this.getPage(lang).newAEMFullPath }));
     const published = await publishPages(pageList);
     if (published) {
-      await this._copyToClipboard(published);
+      const autoDismiss = await this._copyToClipboard(published);
+      if (!autoDismiss) return;
     }
     setTimeout(() => { this._message = undefined; }, 2500);
   }
@@ -137,7 +145,8 @@ class NxLocales extends LitElement {
     const pageList = [{ path: item.newAEMFullPath }];
     const published = await publishPages(pageList);
     if (published) {
-      await this._copyToClipboard(published);
+      const autoDismiss = await this._copyToClipboard(published);
+      if (!autoDismiss) return;
     }
     setTimeout(() => { this._message = undefined; }, 2500);
   }
@@ -221,8 +230,43 @@ class NxLocales extends LitElement {
     `;
   }
 
+  updated(changed) {
+    if (changed.has('_message') && this._message?.manualCopyText) {
+      requestAnimationFrame(() => {
+        const ta = this.shadowRoot?.querySelector('textarea.manual-copy');
+        if (ta) {
+          ta.focus();
+          ta.select();
+        }
+      });
+    }
+    super.updated(changed);
+  }
+
   renderMessage() {
-    return html`<div class="message"><p>${this._message.text}</p></div>`;
+    const { text, manualCopyText } = this._message;
+    if (manualCopyText) {
+      return html`
+        <div class="message message--manual">
+          <div class="message-panel message-panel--manual">
+            <div class="message-manual-top">
+              <span class="message-manual-hint">${text}</span>
+              <button type="button" class="manual-copy-close" @click=${() => { this._message = undefined; }}>
+                Close
+              </button>
+            </div>
+            <textarea class="manual-copy" readonly rows="3" .value=${manualCopyText}></textarea>
+          </div>
+        </div>
+      `;
+    }
+    return html`
+      <div class="message">
+        <div class="message-panel">
+          <p>${text}</p>
+        </div>
+      </div>
+    `;
   }
 
   renderAll() {
