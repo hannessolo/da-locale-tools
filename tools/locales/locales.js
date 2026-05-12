@@ -98,69 +98,98 @@ class NxLocales extends LitElement {
     };
   }
 
+  _liveUrlsJoinFromLangs(langs) {
+    const urls = langs.map((lang) => lang.aemStatus?.live?.url).filter(Boolean);
+    return urls.length ? urls.join('\n') : '';
+  }
+
   /**
-   * @returns {Promise<boolean>} false when manual-copy overlay is shown (do not auto-dismiss)
+   * Clipboard API only. Call from a user gesture (e.g. publish click) before long awaits.
    */
-  async _copyToClipboard(publishedUrls) {
-    const urls = publishedUrls.map((page) => page.resp.live.url);
-    if (urls && urls.length > 0) {
-      const joined = urls.join('\n');
-      this._message = { text: `${urls.length} page(s) published - Urls copied to clipboard` };
+  async _copyPlainTextToClipboard(text) {
+    try {
       const type = 'text/plain';
-      const clipboardItemData = { [type]: [joined] };
-      const clipboardItem = new ClipboardItem(clipboardItemData);
-      try {
-        await navigator.clipboard.write([clipboardItem]);
-      } catch (err) {
-        // Clipboard API can fail in cross-origin iframes; fall back to
-        // a hidden textarea + execCommand which still works in all browsers.
-        const ta = document.createElement('textarea');
-        ta.value = joined;
-        ta.style.cssText = 'position:fixed;opacity:0';
-        document.body.appendChild(ta);
-        ta.select();
-        const copied = document.execCommand('copy');
-        ta.remove();
-        if (!copied) {
-          console.error('Clipboard write failed, execCommand fallback also failed:', err);
-          this._message = {
-            text: 'The following pages were published. Use ctrl+a and ctrl+c to select and copy the URLs.',
-            manualCopyText: joined,
-          };
-          return false;
-        }
-      }
-    } else {
-      this._message = { text: 'No pages published' };
+      const clipboardItem = new ClipboardItem({ [type]: [text] });
+      await navigator.clipboard.write([clipboardItem]);
+      return true;
+    } catch (err) {
+      console.error('Clipboard copy failed:', err);
+      return false;
     }
-    return true;
+  }
+
+  _afterPublishComplete(published, didPreCopy) {
+    if (!published?.length) {
+      setTimeout(() => { this._message = undefined; }, 2500);
+      return;
+    }
+    const respUrls = published.map((p) => p.resp?.live?.url).filter(Boolean);
+    if (!respUrls.length) {
+      this._message = { text: 'No pages published' };
+      setTimeout(() => { this._message = undefined; }, 2500);
+      return;
+    }
+    const respJoined = respUrls.join('\n');
+    const n = respUrls.length;
+    if (didPreCopy) {
+      this._message = {
+        text: `${n} page(s) published — URLs copied to clipboard.`,
+        publishedUrlsText: respJoined,
+      };
+      setTimeout(() => { this._message = undefined; }, 2500);
+      return;
+    }
+    this._message = {
+      text: 'Publishing finished. Click Copy URLs to copy live links.',
+      publishCopyText: respJoined,
+    };
+  }
+
+  /**
+   * Second-chance copy when pre-publish copy failed (new user gesture).
+   */
+  async _handlePublishCopyClick(joined) {
+    const urlCount = joined.split('\n').length;
+    const ok = await this._copyPlainTextToClipboard(joined);
+    if (!ok) {
+      this._message = {
+        text: 'Could not copy automatically. Select the URLs below and copy (Ctrl/Cmd+C).',
+        manualCopyText: joined,
+      };
+      return;
+    }
+    this._message = {
+      text: `${urlCount} page(s) published — URLs copied to clipboard.`,
+      publishedUrlsText: joined,
+    };
+    setTimeout(() => { this._message = undefined; }, 2500);
   }
 
   async handlePublishAll(items) {
-    this._message = { text: 'Publishing ...' };
     const publishLangs = items[0].langs
       ? this.flattenLocaleLangs(items)
       : items;
-    const pageList = publishLangs
-      .filter((lang) => lang.aemStatus)
-      .map((lang) => ({ path: this.getPage(lang).newAEMFullPath }));
-    const published = await publishPages(pageList);
-    if (published) {
-      const autoDismiss = await this._copyToClipboard(published);
-      if (!autoDismiss) return;
+    const langsToPublish = publishLangs.filter((lang) => lang.aemStatus);
+    const pageList = langsToPublish.map((lang) => ({ path: this.getPage(lang).newAEMFullPath }));
+    const preJoined = this._liveUrlsJoinFromLangs(langsToPublish);
+    let didPreCopy = false;
+    if (preJoined) {
+      didPreCopy = await this._copyPlainTextToClipboard(preJoined);
     }
-    setTimeout(() => { this._message = undefined; }, 2500);
+    this._message = { text: 'Publishing ...' };
+    const published = await publishPages(pageList);
+    this._afterPublishComplete(published, didPreCopy);
   }
 
   async handlePublish(item) {
-    this._message = { text: 'Publishing ...' };
-    const pageList = [{ path: item.newAEMFullPath }];
-    const published = await publishPages(pageList);
-    if (published) {
-      const autoDismiss = await this._copyToClipboard(published);
-      if (!autoDismiss) return;
+    const preJoined = item.aemStatus?.live?.url || '';
+    let didPreCopy = false;
+    if (preJoined) {
+      didPreCopy = await this._copyPlainTextToClipboard(preJoined);
     }
-    setTimeout(() => { this._message = undefined; }, 2500);
+    this._message = { text: 'Publishing ...' };
+    const published = await publishPages([{ path: item.newAEMFullPath }]);
+    this._afterPublishComplete(published, didPreCopy);
   }
 
   renderActionButtons(page) {
@@ -243,7 +272,7 @@ class NxLocales extends LitElement {
   }
 
   updated(changed) {
-    if (changed.has('_message') && this._message?.manualCopyText) {
+    if (changed.has('_message') && (this._message?.manualCopyText || this._message?.publishedUrlsText)) {
       requestAnimationFrame(() => {
         const ta = this.shadowRoot?.querySelector('textarea.manual-copy');
         if (ta) {
@@ -256,7 +285,42 @@ class NxLocales extends LitElement {
   }
 
   renderMessage() {
-    const { text, manualCopyText } = this._message;
+    const {
+      text, manualCopyText, publishCopyText, publishedUrlsText,
+    } = this._message;
+    if (publishedUrlsText) {
+      return html`
+        <div class="message">
+          <div class="message-panel message-panel--published-urls">
+            <p>${text}</p>
+            <textarea class="manual-copy" readonly rows="3" .value=${publishedUrlsText}></textarea>
+            <div class="message-publish-copy-actions">
+              <button type="button" class="manual-copy-close" @click=${() => { this._message = undefined; }}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+    if (publishCopyText) {
+      return html`
+        <div class="message">
+          <div class="message-panel message-panel--publish-copy">
+            <p>${text}</p>
+            <textarea class="manual-copy" readonly rows="3" .value=${publishCopyText}></textarea>
+            <div class="message-publish-copy-actions">
+              <button type="button" class="publish-copy-urls" @click=${() => this._handlePublishCopyClick(publishCopyText)}>
+                Copy URLs
+              </button>
+              <button type="button" class="manual-copy-close" @click=${() => { this._message = undefined; }}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
     if (manualCopyText) {
       return html`
         <div class="message message--manual">

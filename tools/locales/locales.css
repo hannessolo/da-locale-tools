@@ -89,6 +89,37 @@ p.current {
   margin: 0 0 12px;
 }
 
+.message-panel--publish-copy p {
+  margin: 0 0 12px;
+  text-align: center;
+}
+
+.message-panel--publish-copy .manual-copy {
+  margin: 0 0 12px;
+}
+
+.message-panel--published-urls p {
+  margin: 0 0 12px;
+  text-align: center;
+}
+
+.message-panel--published-urls .manual-copy {
+  margin: 0 0 12px;
+}
+
+.message-publish-copy-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  align-items: center;
+}
+
+button.publish-copy-urls {
+  background-color: var(--s2-blue-900);
+  color: #fff;
+}
+
 .message-manual-top {
   display: flex;
   align-items: center;
